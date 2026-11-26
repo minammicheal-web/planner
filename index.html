@@ -1052,14 +1052,18 @@ function targetCard(p,S){const tgt=p.target||'',late=tgt&&TT().length&&S.tot.fin
 /* ================= ClickUp link import & live sync ================= */
 function parseCuLink(s){s=String(s||'').trim();const um=s.match(/https?:\/\/[^\s<>"']+/),u=um?um[0]:s;let r;const team=(u.match(/clickup\.com\/(\d{4,})\//)||[])[1]||null;
  if(r=u.match(/\/t\/(?:(\d+)\/)?([A-Za-z0-9_-]+)/))return{type:'task',id:r[2],team:r[1]||team,custom:r[2].includes('-'),url:u};
- if(r=u.match(/\/v\/[a-z]+\/(\d)-(\d+)-\d+/i)){const ty={4:'space',5:'folder',6:'list'}[r[1]];return ty?{type:ty,id:r[2],team,url:u}:null}
  if(r=u.match(/\/v\/(?:o\/)?li\/(\d+)/))return{type:'list',id:r[1],team,url:u};
  if(r=u.match(/\/v\/(?:o\/)?f\/(\d+)/))return{type:'folder',id:r[1],team,url:u};
  if(r=u.match(/\/v\/(?:o\/)?s\/(\d+)/))return{type:'space',id:r[1],team,url:u};
+ if(r=u.match(/\/v\/[a-z]+\/(\d)-(\d+)-\d+/i)){const ty={4:'space',5:'folder',6:'list'}[r[1]];if(ty)return{type:ty,id:r[2],team,url:u}}
+ if(r=u.match(/\/v\/(?!dc\/)[a-z]+\/([A-Za-z0-9]+-[A-Za-z0-9-]+)/i))return{type:'view',id:r[1],team,url:u};
  if(/^\d{5,}$/.test(u))return{type:'list',id:u,url:u};
  return null}
 async function cuAllTasks(id){let all=[],page=0,last=false;while(!last&&page<50){const r=await cu('GET','/list/'+id+'/task?include_closed=true&subtasks=true&archived=false&page='+page);const a=r.tasks||[];all=all.concat(a);last=r.last_page!==false||a.length<100;page++}return all}
 async function cuFetch(src){
+ if(src.type==='view'){const v=(await cu('GET','/view/'+encodeURIComponent(src.id))).view||{},par=v.parent||{},ty={4:'space',5:'folder',6:'list'}[+par.type];
+  if(!ty||!par.id)throw new Error('This view is on the whole workspace (Everything). Open a list, folder or space in ClickUp and copy its link instead.');
+  const d=await cuFetch({...src,type:ty,id:String(par.id)});return{...d,srcType:ty,srcId:d.srcId||String(par.id)}}
  if(src.type==='list'){const l=await cu('GET','/list/'+src.id);return{name:l.name,flat:true,lists:[{id:String(l.id),name:l.name,tasks:await cuAllTasks(l.id)}],list:String(l.id),statuses:l.statuses}}
  if(src.type==='folder'){const f=await cu('GET','/folder/'+src.id),lists=[];for(const l of f.lists||[])lists.push({id:String(l.id),name:l.name,tasks:await cuAllTasks(l.id)});return{name:f.name,lists}}
  if(src.type==='space'){const sp=await cu('GET','/space/'+src.id),fo=await cu('GET','/space/'+src.id+'/folder?archived=false'),fl=await cu('GET','/space/'+src.id+'/list?archived=false'),folders=[],lists=[];
@@ -1108,7 +1112,7 @@ function cuApply(p,data){const st=D.tasks[p.id]=D.tasks[p.id]||{},rs=D.res[p.id]
 let srcBusy=false;
 async function srcSync(p,quiet){if(srcBusy||!p||!p.cuSrc)return;srcBusy=true;if(!quiet){cuLog=[];if(view==='project')render()}
  try{const data=await cuFetch(p.cuSrc),pp=D.projects[p.id];if(!pp||!pp.cuSrc)return;const r=cuApply(pp,data);
-  pp.cuSrc={...pp.cuSrc,id:data.srcId||pp.cuSrc.id,custom:data.srcId?false:pp.cuSrc.custom,at:Date.now(),name:data.name,err:null};
+  pp.cuSrc={...pp.cuSrc,type:data.srcType||pp.cuSrc.type,id:data.srcId||pp.cuSrc.id,custom:data.srcId?false:pp.cuSrc.custom,at:Date.now(),name:data.name,err:null};
   if(data.list)pp.cu={...(pp.cu||{}),list:data.list,name:data.name,statuses:(data.statuses||[]).map(s=>({status:s.status,type:s.type})),at:(pp.cu||{}).at||null};
   touch(p.id);save();const ch=r.added+r.updated+r.removed,msg=ch?'ClickUp: '+[r.added&&r.added+' new',r.updated&&r.updated+' updated',r.removed&&r.removed+' removed'].filter(Boolean).join(', '):'Up to date with ClickUp';
   if(!quiet||ch)toast(msg);if(!quiet)logCU('ok',esc(msg)+'.');return r}
@@ -1119,10 +1123,10 @@ let skipPop=false;
 async function cuImport(){const src=parseCuLink(($('#cuLinkIn')||{}).value||ui.cuLink||'');
  if(!src){toast('Paste a ClickUp link to a list, folder, space or task');return}
  if(!(D.settings.cuToken||'').trim()){toast('Add your ClickUp token in Settings first');go('settings');return}
- openModal('<h3>Importing from ClickUp</h3><div class="muted" style="padding:8px 0 16px">Reading the '+src.type+' and its tasks…</div>');
+ openModal('<h3>Importing from ClickUp</h3><div class="muted" style="padding:8px 0 16px">Reading '+(src.type==='view'?'the view':'the '+src.type)+' and its tasks…</div>');
  try{const data=await cuFetch(src),id=uid(),p={id,name:data.name||'ClickUp project',start:'',cur:'EGP',wk:ui.nwk.split(',').map(Number),hol:[],hpd:8,level:false,created:Date.now(),cuSrc:{...src,auto:true}};
   D.projects[id]=p;D.tasks[id]={};D.res[id]={};const r=cuApply(p,data);
-  p.cuSrc={...p.cuSrc,id:data.srcId||src.id,custom:data.srcId?false:src.custom,at:Date.now(),name:data.name};
+  p.cuSrc={...p.cuSrc,type:data.srcType||src.type,id:data.srcId||src.id,custom:data.srcId?false:src.custom,at:Date.now(),name:data.name};
   if(data.list)p.cu={list:data.list,name:data.name,statuses:(data.statuses||[]).map(s=>({status:s.status,type:s.type})),at:null};
   const hc=ui.nhol||D.settings.holCC||'eg';if(hc!=='none')p.holSrc={cc:hc,lang:D.settings.holLang||'en',pub:true};
   D.settings.cur=id;p.upd=Date.now();ui.cuLink='';cache=null;save();collapsed.clear();resolver=null;$('#modal').classList.remove('show');
