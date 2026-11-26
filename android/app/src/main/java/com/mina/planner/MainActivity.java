@@ -36,6 +36,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
     private volatile String pendingAction = "";
+    private volatile String sharedText = "";
 
     @Override
     protected void onCreate(Bundle state) {
@@ -80,8 +81,23 @@ public class MainActivity extends Activity {
 
         if (DriveSync.prefs(this).getBoolean("on", false)) DriveSync.schedule(this);
 
+        readShare(getIntent());
         if (state != null) web.restoreState(state);
         else web.loadUrl("file:///android_asset/index.html");
+    }
+
+    private void readShare(Intent i) {
+        if (i == null || !Intent.ACTION_SEND.equals(i.getAction())) return;
+        String t = i.getStringExtra(Intent.EXTRA_TEXT);
+        if (t != null && t.trim().length() > 0) sharedText = t.trim();
+    }
+
+    @Override
+    protected void onNewIntent(Intent i) {
+        super.onNewIntent(i);
+        setIntent(i);
+        readShare(i);
+        if (web != null && sharedText.length() > 0) web.evaluateJavascript("window.onShared&&window.onShared()", null);
     }
 
     @Override
@@ -204,6 +220,26 @@ public class MainActivity extends Activity {
 
     /** Functions the page can call as Android.xxx(). */
     private class Bridge {
+        @JavascriptInterface
+        public String clip() {
+            try {
+                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                android.content.ClipData c = cm == null ? null : cm.getPrimaryClip();
+                if (c == null || c.getItemCount() == 0) return "";
+                CharSequence t = c.getItemAt(0).coerceToText(MainActivity.this);
+                return t == null ? "" : t.toString();
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public String takeShared() {
+            String t = sharedText;
+            sharedText = "";
+            return t;
+        }
+
         /** Paints the phone's status and navigation bars like the page and picks light or dark icons. */
         @JavascriptInterface
         public void setBars(final String color, final boolean darkIcons) {
